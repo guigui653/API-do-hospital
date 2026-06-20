@@ -1,0 +1,1265 @@
+================================================================================
+PROJETO: API Hospital Cuidar+ — Backend Java Spring Boot
+ATUALIZADO EM: 2026-06-20
+TECNOLOGIAS: Java 21, Spring Boot, Spring Security (JWT Auth0), JPA/Hibernate, PostgreSQL, WebSockets (STOMP)
+AUTENTICACAO: 100% via CPF/senha com JWT próprio. Firebase REMOVIDO.
+================================================================================
+
+================================================================================
+ARQUIVO: api/src/main/resources/application.properties
+================================================================================
+spring.application.name=api
+
+spring.datasource.url=jdbc:postgresql://localhost:5432/postgres
+spring.datasource.driver-class-name=org.postgresql.Driver
+spring.datasource.username=postgres
+spring.datasource.password=postgres
+
+spring.jpa.show-sql=true
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.database-platform=org.hibernate.dialect.PostgreSQLDialect
+spring.jpa.properties.hibernate.jdbc.lob.non_contextual_creation=true
+
+api.security.token.secret=${JWT_SECRET:senha_super_secreta_hospital_123}
+
+# Define a porta da sua API (padrão é 8080)
+server.port=8080
+
+# Garante que a API vai aceitar requisições do seu IP da rede Wi-Fi (0.0.0.0 libera para todos os IPs locais)
+server.address=0.0.0.0
+
+================================================================================
+ARQUIVO: api/src/main/java/com/hospital/api/ApiApplication.java
+================================================================================
+package com.hospital.api;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+
+@SpringBootApplication
+@EnableJpaRepositories(basePackages = "com.hospital.api.repository")
+public class ApiApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(ApiApplication.class, args);
+    }
+}
+
+================================================================================
+ARQUIVO: api/src/main/java/com/hospital/api/infra/security/SecurityConfigurations.java
+================================================================================
+package com.hospital.api.infra.security;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+@Configuration
+@EnableWebSecurity
+public class SecurityConfigurations {
+
+    @Autowired
+    private SecurityFilter securityFilter;
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        return http
+                .cors(cors -> cors.configurationSource(request -> {
+                    var corsConfiguration = new org.springframework.web.cors.CorsConfiguration();
+                    corsConfiguration.setAllowedOriginPatterns(java.util.List.of("*"));
+                    corsConfiguration.setAllowedMethods(java.util.List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"));
+                    corsConfiguration.setAllowedHeaders(java.util.List.of("*"));
+                    corsConfiguration.setAllowCredentials(true);
+                    return corsConfiguration;
+                }))
+                .csrf(csrf -> csrf.disable())
+                .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(req -> {
+                    req.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll();
+                    req.requestMatchers("/triagem.html", "/fila.html", "/static/**", "/css/**", "/js/**", "/images/**").permitAll();
+                    req.requestMatchers(HttpMethod.POST, "/pacientes").permitAll();
+                    req.requestMatchers(HttpMethod.POST, "/pacientes/login").permitAll();
+                    req.requestMatchers(HttpMethod.POST, "/usuarios/login", "/login", "/auth/login").permitAll();
+                    req.requestMatchers(HttpMethod.POST, "/api/auth/login", "/pacientes/login").permitAll();
+                    req.requestMatchers("/api/triagem/**", "/triagem/**").permitAll();
+                    req.requestMatchers("/chamados", "/chamados/**", "/api/chamados", "/api/chamados/**").permitAll();
+                    req.requestMatchers("/categorias", "/categorias/**", "/api/categorias", "/api/categorias/**").permitAll();
+                    req.requestMatchers("/servicos", "/servicos/**", "/api/servicos", "/api/servicos/**").permitAll();
+                    req.requestMatchers("/leitos", "/leitos/**", "/api/leitos", "/api/leitos/**").permitAll();
+                    req.requestMatchers("/internacoes", "/internacoes/**", "/api/internacoes", "/api/internacoes/**").permitAll();
+                    req.requestMatchers("/quartos", "/quartos/**", "/api/quartos", "/api/quartos/**").permitAll();
+                    req.requestMatchers("/api/avaliacoes", "/api/avaliacoes/**", "/avaliacoes", "/avaliacoes/**").permitAll();
+                    req.requestMatchers(HttpMethod.POST, "/esqueceu-senha").permitAll();
+                    req.requestMatchers(HttpMethod.POST, "/api/auth/esqueci-senha", "/api/auth/resetar-senha").permitAll();
+                    req.requestMatchers("/ws/**", "/ws/info/**").permitAll();
+                    req.requestMatchers("/ws-sock/**", "/ws-sock/info/**").permitAll();
+                    req.requestMatchers("/v3/api-docs/**", "/swagger-ui.html", "/swagger-ui/**").permitAll();
+                    req.anyRequest().authenticated();
+                })
+                .addFilterBefore(securityFilter, UsernamePasswordAuthenticationFilter.class)
+                .build();
+    }
+
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration configuration) throws Exception {
+        return configuration.getAuthenticationManager();
+    }
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+}
+
+================================================================================
+ARQUIVO: api/src/main/java/com/hospital/api/infra/security/SecurityFilter.java
+================================================================================
+package com.hospital.api.infra.security;
+
+import com.hospital.api.repository.UsuarioRepository;
+import com.hospital.api.repository.PacienteRepository;
+import com.hospital.api.entity.Usuario;
+import com.hospital.api.entity.Paciente;
+import com.hospital.api.enums.TipoUsuario;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
+
+@Component
+public class SecurityFilter extends OncePerRequestFilter {
+
+    @Autowired
+    private TokenService tokenService;
+
+    @Autowired
+    private UsuarioRepository usuarioRepository;
+
+    @Autowired
+    private PacienteRepository pacienteRepository;
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
+        var tokenJWT = recuperarToken(request);
+
+        if (tokenJWT != null) {
+            try {
+                var subject = tokenService.getSubject(tokenJWT);
+
+                org.springframework.security.core.userdetails.UserDetails userDetails = usuarioRepository.findByCpf(subject)
+                        .filter(u -> u.getTipo() != TipoUsuario.PACIENTE)
+                        .map(u -> (org.springframework.security.core.userdetails.UserDetails) u)
+                        .orElse(null);
+
+                if (userDetails == null) {
+                    userDetails = pacienteRepository.findByCpf(subject).orElse(null);
+                }
+                if (userDetails == null && subject.length() == 11) {
+                    String subjectFormatado = subject.substring(0, 3) + "." +
+                                              subject.substring(3, 6) + "." +
+                                              subject.substring(6, 9) + "-" +
+                                              subject.substring(9, 11);
+                    userDetails = pacienteRepository.findByCpf(subjectFormatado).orElse(null);
+                }
+
+                if (userDetails != null) {
+                    var authentication = new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
+                    SecurityContextHolder.getContext().setAuthentication(authentication);
+                }
+            } catch (RuntimeException e) {
+                // Token inválido — deixa passar sem autenticação
+            }
+        }
+
+        filterChain.doFilter(request, response);
+    }
+
+    private String recuperarToken(HttpServletRequest request) {
+        var authorizationHeader = request.getHeader("Authorization");
+        if (authorizationHeader != null && authorizationHeader.startsWith("Bearer ")) {
+            var token = authorizationHeader.replace("Bearer ", "").trim();
+            return token.isBlank() ? null : token;
+        }
+        return null;
+    }
+}
+
+================================================================================
+ARQUIVO: api/src/main/java/com/hospital/api/infra/security/TokenService.java
+================================================================================
+package com.hospital.api.infra.security;
+
+import com.auth0.jwt.JWT;
+import com.auth0.jwt.algorithms.Algorithm;
+import com.auth0.jwt.exceptions.JWTCreationException;
+import com.auth0.jwt.exceptions.JWTVerificationException;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+
+@Service
+public class TokenService {
+
+    @Value("${api.security.token.secret}")
+    private String secret;
+
+    public String gerarToken(String subject) {
+        try {
+            var algoritmo = Algorithm.HMAC256(secret);
+            return JWT.create()
+                    .withIssuer("API AppCuidar+")
+                    .withSubject(subject)
+                    .withExpiresAt(dataExpiracao())
+                    .sign(algoritmo);
+        } catch (JWTCreationException exception){
+            throw new RuntimeException("Erro ao gerar token jwt", exception);
+        }
+    }
+
+    public String getSubject(String tokenJWT) {
+        try {
+            var algoritmo = Algorithm.HMAC256(secret);
+            return JWT.require(algoritmo)
+                    .withIssuer("API AppCuidar+")
+                    .build()
+                    .verify(tokenJWT)
+                    .getSubject();
+        } catch (JWTVerificationException exception) {
+            throw new RuntimeException("Token JWT inválido ou expirado!");
+        }
+    }
+
+    private Instant dataExpiracao() {
+        return LocalDateTime.now().plusDays(30).toInstant(ZoneOffset.of("-03:00"));
+    }
+}
+
+================================================================================
+ARQUIVO: api/src/main/java/com/hospital/api/infra/config/FirebaseConfig.java
+NOTA: Firebase DESATIVADO. Classe vazia mantida apenas para não quebrar o pacote.
+================================================================================
+package com.hospital.api.infra.config;
+
+// FirebaseConfig desativado — autenticação via Firebase removida do projeto.
+// O login é feito via CPF/senha com JWT gerado pelo próprio Spring Boot.
+
+public class FirebaseConfig {
+    // Classe vazia — Firebase desativado.
+}
+
+================================================================================
+ARQUIVO: api/src/main/java/com/hospital/api/controller/AutenticacaoController.java
+================================================================================
+package com.hospital.api.controller;
+
+import com.hospital.api.dto.request.DadosAutenticacaoDTO;
+import com.hospital.api.dto.response.TokenDTO;
+import com.hospital.api.entity.Paciente;
+import com.hospital.api.entity.Usuario;
+import com.hospital.api.infra.security.TokenService;
+import com.hospital.api.repository.PacienteRepository;
+import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.AuthenticationCredentialsNotFoundException;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.AuthenticationException;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@CrossOrigin(originPatterns = "*")
+public class AutenticacaoController {
+
+    @Autowired
+    private AuthenticationManager manager;
+
+    @Autowired
+    private TokenService tokenService;
+
+    @Autowired
+    private PacienteRepository pacienteRepository;
+
+    @PostMapping({"/pacientes/login", "/api/auth/login"})
+    public ResponseEntity<TokenDTO> efetuarLogin(@RequestBody @Valid DadosAutenticacaoDTO dados) {
+        try {
+            var cpf = dados.cpf().replaceAll("\\D", "");
+            if (cpf.isBlank()) {
+                throw new AuthenticationCredentialsNotFoundException("CPF vazio");
+            }
+
+            var authenticationToken = new UsernamePasswordAuthenticationToken(cpf, dados.senha());
+            var authentication = manager.authenticate(authenticationToken);
+
+            var principal = authentication.getPrincipal();
+            String tokenJWT;
+            Long idPaciente = null;
+            String nome;
+            String leito = null;
+
+            if (principal instanceof Usuario usuario) {
+                tokenJWT = tokenService.gerarToken(usuario.getCpf());
+                nome = usuario.getNome();
+
+                Paciente paciente = pacienteRepository.findByCpf(usuario.getCpf()).orElse(null);
+                if (paciente != null) {
+                    idPaciente = paciente.getIdPaciente();
+                    leito = paciente.getLeito();
+                }
+            } else if (principal instanceof Paciente paciente) {
+                tokenJWT = tokenService.gerarToken(paciente.getCpf());
+                idPaciente = paciente.getIdPaciente();
+                nome = paciente.getNome();
+                leito = paciente.getLeito();
+            } else {
+                throw new AuthenticationCredentialsNotFoundException("Principal de autenticação inválido.");
+            }
+
+            return ResponseEntity.ok(new TokenDTO(tokenJWT, idPaciente, nome, leito));
+
+        } catch (AuthenticationException e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+    }
+}
+
+================================================================================
+ARQUIVO: api/src/main/java/com/hospital/api/controller/AuthController.java
+================================================================================
+package com.hospital.api.controller;
+
+import com.hospital.api.dto.request.EsqueciSenhaRequestDTO;
+import com.hospital.api.dto.request.ResetarSenhaRequestDTO;
+import com.hospital.api.service.RecuperacaoSenhaService;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/auth")
+@RequiredArgsConstructor
+public class AuthController {
+
+    private final RecuperacaoSenhaService recuperacaoSenhaService;
+
+    @PostMapping("/esqueci-senha")
+    public ResponseEntity<Map<String, String>> esqueciSenha(@RequestBody @Valid EsqueciSenhaRequestDTO dto) {
+        try {
+            Map<String, String> resposta = recuperacaoSenhaService.solicitarRecuperacao(dto);
+            return ResponseEntity.ok(resposta);
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("erro", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/resetar-senha")
+    public ResponseEntity<Map<String, String>> resetarSenha(@RequestBody @Valid ResetarSenhaRequestDTO dto) {
+        try {
+            recuperacaoSenhaService.resetarSenha(dto);
+            return ResponseEntity.ok(Map.of("mensagem", "Senha redefinida com sucesso! Você já pode fazer login."));
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("erro", e.getMessage()));
+        }
+    }
+}
+
+================================================================================
+ARQUIVO: api/src/main/java/com/hospital/api/controller/ChamadoController.java
+================================================================================
+package com.hospital.api.controller;
+
+import com.hospital.api.dto.request.AvaliacaoRequestDTO;
+import com.hospital.api.dto.request.ChamadoAtualizacaoDTO;
+import com.hospital.api.dto.request.ChamadoRequestDTO;
+import com.hospital.api.dto.request.PedidoRapidoRequestDTO;
+import com.hospital.api.dto.request.FinalizarChamadoRequestDTO;
+import com.hospital.api.dto.response.ChamadoResponseDTO;
+import com.hospital.api.enums.StatusChamado;
+import com.hospital.api.enums.TipoChamado;
+import com.hospital.api.service.ChamadoService;
+import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.Map;
+
+@RestController
+@RequestMapping({"/chamados", "/api/chamados"})
+@CrossOrigin(originPatterns = "*")
+public class ChamadoController {
+
+    private final ChamadoService chamadoService;
+    private final SimpMessagingTemplate ws;
+
+    public ChamadoController(ChamadoService chamadoService, SimpMessagingTemplate ws) {
+        this.chamadoService = chamadoService;
+        this.ws = ws;
+    }
+
+    @PostMapping
+    public ResponseEntity<ChamadoResponseDTO> abrirChamado(@RequestBody @Valid ChamadoRequestDTO dados) {
+        ChamadoResponseDTO chamado = chamadoService.abrirChamado(dados);
+        ws.convertAndSend("/topic/painel", chamado);
+        return ResponseEntity.status(HttpStatus.CREATED).body(chamado);
+    }
+
+    @PostMapping("/pedido-rapido")
+    public ResponseEntity<ChamadoResponseDTO> abrirPedidoRapido(@RequestBody @Valid PedidoRapidoRequestDTO dto) {
+        ChamadoResponseDTO chamado = chamadoService.abrirPedidoRapido(dto);
+        ws.convertAndSend("/topic/painel", chamado);
+        return ResponseEntity.status(HttpStatus.CREATED).body(chamado);
+    }
+
+    @PutMapping("/{id}/confirmar")
+    public ResponseEntity<ChamadoResponseDTO> confirmarAtendimento(@PathVariable Long id) {
+        ChamadoResponseDTO chamado = chamadoService.confirmarAtendimento(id);
+        if (chamado.idPaciente() != null) {
+            ws.convertAndSend("/topic/paciente/" + chamado.idPaciente(), chamado);
+        }
+        ws.convertAndSend("/topic/painel", chamado);
+        return ResponseEntity.ok(chamado);
+    }
+
+    @PutMapping("/{id}/finalizar")
+    public ResponseEntity<ChamadoResponseDTO> finalizarAtendimento(
+            @PathVariable Long id,
+            @RequestBody @Valid FinalizarChamadoRequestDTO dados) {
+        ChamadoResponseDTO chamado = chamadoService.finalizarAtendimento(id, dados);
+        if (chamado.idPaciente() != null) {
+            ws.convertAndSend("/topic/paciente/" + chamado.idPaciente(), chamado);
+        }
+        ws.convertAndSend("/topic/painel", chamado);
+        return ResponseEntity.ok(chamado);
+    }
+
+    @GetMapping
+    public ResponseEntity<List<ChamadoResponseDTO>> listarTodos() {
+        return ResponseEntity.ok(chamadoService.listarTodos());
+    }
+
+    @GetMapping("/paciente/{idPaciente}")
+    public ResponseEntity<List<ChamadoResponseDTO>> listarPorPaciente(@PathVariable Long idPaciente) {
+        return ResponseEntity.ok(chamadoService.listarPorPaciente(idPaciente));
+    }
+
+    @GetMapping("/ativos")
+    public ResponseEntity<List<ChamadoResponseDTO>> listarAtivos() {
+        return ResponseEntity.ok(chamadoService.listarAtivos());
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<ChamadoResponseDTO> buscarPorId(@PathVariable Long id) {
+        return ResponseEntity.ok(chamadoService.buscarPorId(id));
+    }
+
+    @GetMapping("/status/{status}")
+    public ResponseEntity<List<ChamadoResponseDTO>> listarPorStatus(@PathVariable StatusChamado status) {
+        return ResponseEntity.ok(chamadoService.listarPorStatus(status));
+    }
+
+    @GetMapping("/tipo/{tipo}")
+    public ResponseEntity<List<ChamadoResponseDTO>> listarPorTipo(@PathVariable TipoChamado tipo) {
+        return ResponseEntity.ok(chamadoService.listarPorTipo(tipo));
+    }
+
+    @GetMapping("/categoria/{idCategoria}")
+    public ResponseEntity<List<ChamadoResponseDTO>> listarPorCategoria(@PathVariable Integer idCategoria) {
+        return ResponseEntity.ok(chamadoService.listarPorCategoria(idCategoria));
+    }
+
+    @PutMapping("/{id}")
+    public ResponseEntity<ChamadoResponseDTO> atualizarChamado(
+            @PathVariable Long id, @RequestBody ChamadoAtualizacaoDTO dados) {
+        return ResponseEntity.ok(chamadoService.atualizarChamado(id, dados));
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> deletarChamado(@PathVariable Long id) {
+        chamadoService.deletarChamado(id);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{id}/avaliar")
+    public ResponseEntity<ChamadoResponseDTO> avaliarChamado(
+            @PathVariable Long id,
+            @RequestBody @Valid AvaliacaoRequestDTO dados) {
+        return ResponseEntity.ok(chamadoService.avaliarChamado(id, dados));
+    }
+
+    @GetMapping("/historico/{idPaciente}")
+    public ResponseEntity<List<ChamadoResponseDTO>> obterHistorico24Horas(@PathVariable Long idPaciente) {
+        return ResponseEntity.ok(chamadoService.obterHistorico24Horas(idPaciente));
+    }
+
+    @GetMapping("/ping")
+    public ResponseEntity<Map<String, String>> ping() {
+        return ResponseEntity.ok(Map.of("status", "ok", "websocket", "ws://localhost:8080/ws"));
+    }
+}
+
+================================================================================
+ARQUIVO: api/src/main/java/com/hospital/api/controller/PacienteController.java
+================================================================================
+package com.hospital.api.controller;
+
+import com.hospital.api.dto.request.PacienteRequestDTO;
+import com.hospital.api.dto.request.PacienteAtualizacaoDTO;
+import com.hospital.api.dto.response.PacienteResponseDTO;
+import com.hospital.api.service.PacienteService;
+import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+@RestController
+@RequestMapping({"/pacientes", "/api/pacientes"})
+@CrossOrigin(originPatterns = "*")
+public class PacienteController {
+
+    private final PacienteService pacienteService;
+
+    public PacienteController(PacienteService pacienteService) {
+        this.pacienteService = pacienteService;
+    }
+
+    @PostMapping
+    public ResponseEntity<PacienteResponseDTO> cadastrar(@RequestBody @Valid PacienteRequestDTO dados) {
+        PacienteResponseDTO response = pacienteService.cadastrar(dados);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    @GetMapping
+    public ResponseEntity<List<PacienteResponseDTO>> listarTodos() {
+        return ResponseEntity.ok(pacienteService.listarTodos());
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<PacienteResponseDTO> buscarPorId(@PathVariable Long id) {
+        return ResponseEntity.ok(pacienteService.buscarPorId(id));
+    }
+
+    @PutMapping("/{id}")
+    public ResponseEntity<PacienteResponseDTO> atualizar(@PathVariable Long id, @RequestBody @Valid PacienteAtualizacaoDTO dados) {
+        return ResponseEntity.ok(pacienteService.atualizar(id, dados));
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> deletar(@PathVariable Long id) {
+        pacienteService.deletar(id);
+        return ResponseEntity.noContent().build();
+    }
+}
+
+================================================================================
+ARQUIVO: api/src/main/java/com/hospital/api/controller/TriagemController.java
+================================================================================
+package com.hospital.api.controller;
+
+import com.hospital.api.dto.request.DadosTriagemDTO;
+import com.hospital.api.dto.request.DadosListagemTriagemDTO;
+import com.hospital.api.dto.response.TriagemResponseDTO;
+import com.hospital.api.entity.Triagem;
+import com.hospital.api.enums.NivelUrgencia;
+import com.hospital.api.repository.TriagemRepository;
+import com.hospital.api.service.TriagemService;
+import jakarta.validation.Valid;
+import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.Comparator;
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/triagem")
+@CrossOrigin(originPatterns = "*")
+public class TriagemController {
+
+    private final TriagemRepository triagemRepository;
+    private final TriagemService triagemService;
+
+    public TriagemController(TriagemRepository triagemRepository, TriagemService triagemService) {
+        this.triagemRepository = triagemRepository;
+        this.triagemService = triagemService;
+    }
+
+    @PostMapping
+    @Transactional
+    public ResponseEntity<TriagemResponseDTO> receberTriagem(@RequestBody @Valid DadosTriagemDTO dados) {
+        TriagemResponseDTO resposta = triagemService.registrarTriagem(dados);
+        return ResponseEntity.ok(resposta);
+    }
+
+    @GetMapping
+    public ResponseEntity<List<DadosListagemTriagemDTO>> listar() {
+        var lista = triagemRepository.findAll()
+                .stream()
+                .map(DadosListagemTriagemDTO::new)
+                .sorted(Comparator.comparingInt(this::pesoUrgencia))
+                .toList();
+        return ResponseEntity.ok(lista);
+    }
+
+    @DeleteMapping("/{id}")
+    @Transactional
+    public ResponseEntity<Void> atender(@PathVariable Long id) {
+        if (!triagemRepository.existsById(id)) {
+            return ResponseEntity.notFound().build();
+        }
+        triagemRepository.deleteById(id);
+        return ResponseEntity.noContent().build();
+    }
+
+    private int pesoUrgencia(DadosListagemTriagemDTO dto) {
+        if (dto.urgencia() == null) return 4;
+        return switch (dto.urgencia()) {
+            case VERMELHO -> 1;
+            case AMARELO  -> 2;
+            case VERDE    -> 3;
+        };
+    }
+}
+
+================================================================================
+ARQUIVO: api/src/main/java/com/hospital/api/entity/Paciente.java
+================================================================================
+package com.hospital.api.entity;
+
+import com.hospital.api.enums.SexoPaciente;
+import jakarta.persistence.*;
+import lombok.*;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.userdetails.UserDetails;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+
+@Table(name = "paciente")
+@Entity(name = "Paciente")
+@Getter @Setter @NoArgsConstructor @AllArgsConstructor
+public class Paciente implements UserDetails {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(name = "id_paciente")
+    private Long idPaciente;
+
+    @Column(nullable = false)
+    private String nome;
+
+    @Column(unique = true)
+    private String cpf;
+
+    @Column(name = "data_nascimento")
+    private LocalDate dataNascimento;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "sexo")
+    private SexoPaciente sexo;
+
+    @Column(name = "telefone_contato")
+    private String telefoneContato;
+
+    @Column(name = "nome_responsavel")
+    private String nomeResponsavel;
+
+    @Column(name = "telefone_responsavel")
+    private String telefoneResponsavel;
+
+    private String leito;
+
+    @Column(name = "numero_prontuario", unique = true)
+    private String numeroProntuario;
+
+    private String senha;
+
+    private Boolean ativo = true;
+
+    @Column(name = "criado_em")
+    private LocalDateTime criadoEm = LocalDateTime.now();
+
+    @OneToMany(mappedBy = "paciente", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<Notificacao> notificacoes = new ArrayList<>();
+
+    @Override
+    public Collection<? extends GrantedAuthority> getAuthorities() {
+        return List.of(new SimpleGrantedAuthority("ROLE_PACIENTE"));
+    }
+
+    @Override public String getPassword() { return senha; }
+    @Override public String getUsername() { return cpf; }
+    @Override public boolean isAccountNonExpired() { return true; }
+    @Override public boolean isAccountNonLocked() { return true; }
+    @Override public boolean isCredentialsNonExpired() { return true; }
+    @Override public boolean isEnabled() { return ativo; }
+}
+
+================================================================================
+ARQUIVO: api/src/main/java/com/hospital/api/entity/Usuario.java
+================================================================================
+package com.hospital.api.entity;
+
+import com.hospital.api.enums.TipoUsuario;
+import jakarta.persistence.*;
+import lombok.*;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.userdetails.UserDetails;
+
+import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.List;
+
+@Entity
+@Table(name = "usuario")
+@Getter @Setter @NoArgsConstructor @AllArgsConstructor
+@EqualsAndHashCode(of = "idUsuario")
+public class Usuario implements UserDetails {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(name = "id_usuario")
+    private Integer idUsuario;
+
+    private String nome;
+    private String cpf;
+    private String email;
+    private String telefone;
+    private String senha;
+
+    @Enumerated(EnumType.STRING)
+    private TipoUsuario tipo;
+
+    private Boolean ativo;
+
+    @Column(name = "ultimo_login")
+    private LocalDateTime ultimoLogin;
+
+    @Column(name = "criado_em")
+    private LocalDateTime criadoEm;
+
+    @Override
+    public Collection<? extends GrantedAuthority> getAuthorities() {
+        if (this.tipo != null) {
+            return List.of(new SimpleGrantedAuthority("ROLE_" + this.tipo.name().toUpperCase()));
+        }
+        return List.of(new SimpleGrantedAuthority("ROLE_USER"));
+    }
+
+    @Override public String getPassword() { return senha; }
+    @Override public String getUsername() { return cpf; }
+    @Override public boolean isAccountNonExpired() { return true; }
+    @Override public boolean isAccountNonLocked() { return true; }
+    @Override public boolean isCredentialsNonExpired() { return true; }
+    @Override public boolean isEnabled() { return ativo; }
+    public void inativar() { this.ativo = false; }
+}
+
+================================================================================
+ARQUIVO: api/src/main/java/com/hospital/api/entity/Chamado.java
+================================================================================
+package com.hospital.api.entity;
+
+import com.hospital.api.enums.StatusChamado;
+import com.hospital.api.enums.TipoChamado;
+import jakarta.persistence.*;
+import lombok.*;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "chamado")
+@Getter @Setter @NoArgsConstructor @AllArgsConstructor
+@EqualsAndHashCode(of = "idChamado")
+public class Chamado {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(name = "id_chamado")
+    private long idChamado;
+
+    @ManyToOne
+    @JoinColumn(name = "id_paciente")
+    private Paciente paciente;
+
+    @ManyToOne
+    @JoinColumn(name = "id_leito")
+    private Leito leito;
+
+    @ManyToOne
+    @JoinColumn(name = "id_servico")
+    private Servico servico;
+
+    @ManyToOne
+    @JoinColumn(name = "id_colaborador")
+    private Usuario colaborador;
+
+    @Enumerated(EnumType.STRING)
+    private StatusChamado status;
+
+    @Enumerated(EnumType.STRING)
+    private TipoChamado tipo;
+
+    private String prioridade;
+    private String observacao;
+
+    @Column(name = "data_abertura")
+    private LocalDateTime dataAbertura;
+
+    @Column(name = "data_inicio_atend")
+    private LocalDateTime dataInicioAtend;
+
+    @Column(name = "data_conclusao")
+    private LocalDateTime dataConclusao;
+
+    @Column(name = "nota_avaliacao")
+    private Integer notaAvaliacao;
+
+    @Column(name = "comentario_avaliacao")
+    private String comentarioAvaliacao;
+
+    @Column(name = "descricao_resolucao")
+    private String descricaoResolucao;
+}
+
+================================================================================
+ARQUIVO: api/src/main/java/com/hospital/api/service/PacienteService.java
+================================================================================
+package com.hospital.api.service;
+
+import com.hospital.api.dto.request.LoginRequestDTO;
+import com.hospital.api.dto.request.PacienteAtualizacaoDTO;
+import com.hospital.api.dto.request.PacienteRequestDTO;
+import com.hospital.api.dto.response.PacienteResponseDTO;
+import com.hospital.api.entity.Paciente;
+import com.hospital.api.repository.PacienteRepository;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Service
+public class PacienteService {
+
+    private final PacienteRepository pacienteRepository;
+    private final PasswordEncoder passwordEncoder;
+
+    public PacienteService(PacienteRepository pacienteRepository, PasswordEncoder passwordEncoder) {
+        this.pacienteRepository = pacienteRepository;
+        this.passwordEncoder = passwordEncoder;
+    }
+
+    @Transactional
+    public PacienteResponseDTO cadastrar(PacienteRequestDTO dto) {
+        if (dto.cpf() == null || dto.cpf().isBlank()) {
+            throw new IllegalArgumentException("Erro: O CPF é obrigatório para cadastrar o paciente!");
+        }
+        var cpfLimpo = dto.cpf().replaceAll("\\D", "");
+        if (cpfLimpo.length() < 11) {
+            throw new IllegalArgumentException("Erro: CPF inválido! Digite todos os 11 números.");
+        }
+
+        // Senha inicial: primeiros 3 dígitos do CPF
+        String senhaInicial = cpfLimpo.substring(0, 3);
+
+        Paciente paciente = new Paciente();
+        paciente.setNome(dto.nome());
+        paciente.setCpf(cpfLimpo);
+        paciente.setSenha(passwordEncoder.encode(senhaInicial));
+        paciente.setTelefoneContato(dto.telefoneContato());
+        paciente.setNumeroProntuario(dto.numeroProntuario());
+        paciente.setDataNascimento(dto.dataNascimento());
+        paciente.setSexo(dto.sexo());
+        paciente.setNomeResponsavel(dto.nomeResponsavel());
+        paciente.setTelefoneResponsavel(dto.telefoneResponsavel());
+        paciente.setAtivo(true);
+
+        pacienteRepository.save(paciente);
+        return new PacienteResponseDTO(paciente);
+    }
+
+    @Transactional(readOnly = true)
+    public List<PacienteResponseDTO> listarTodos() {
+        return pacienteRepository.findAll().stream().map(PacienteResponseDTO::new).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public PacienteResponseDTO buscarPorId(Long id) {
+        Paciente paciente = pacienteRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Paciente não encontrado"));
+        return new PacienteResponseDTO(paciente);
+    }
+
+    @Transactional
+    public PacienteResponseDTO atualizar(Long id, PacienteAtualizacaoDTO dto) {
+        Paciente paciente = pacienteRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Paciente não encontrado para atualização"));
+        if (dto.telefoneContato() != null) paciente.setTelefoneContato(dto.telefoneContato());
+        if (dto.nomeResponsavel() != null) paciente.setNomeResponsavel(dto.nomeResponsavel());
+        if (dto.telefoneResponsavel() != null) paciente.setTelefoneResponsavel(dto.telefoneResponsavel());
+        pacienteRepository.save(paciente);
+        return new PacienteResponseDTO(paciente);
+    }
+
+    @Transactional
+    public void deletar(Long id) {
+        Paciente paciente = pacienteRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Paciente não encontrado para exclusão"));
+        paciente.setAtivo(false);
+        pacienteRepository.save(paciente);
+    }
+}
+
+================================================================================
+ARQUIVO: api/src/main/java/com/hospital/api/service/RecuperacaoSenhaService.java
+================================================================================
+package com.hospital.api.service;
+
+import com.hospital.api.dto.request.EsqueciSenhaRequestDTO;
+import com.hospital.api.dto.request.ResetarSenhaRequestDTO;
+import com.hospital.api.entity.RecuperacaoSenha;
+import com.hospital.api.entity.Usuario;
+import com.hospital.api.entity.Paciente;
+import com.hospital.api.repository.RecuperacaoSenhaRepository;
+import com.hospital.api.repository.UsuarioRepository;
+import com.hospital.api.repository.PacienteRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.security.SecureRandom;
+import java.time.LocalDateTime;
+import java.util.Map;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class RecuperacaoSenhaService {
+
+    private static final int EXPIRACAO_MINUTOS = 15;
+
+    private final UsuarioRepository usuarioRepository;
+    private final PacienteRepository pacienteRepository;
+    private final RecuperacaoSenhaRepository recuperacaoSenhaRepository;
+    private final PasswordEncoder passwordEncoder;
+
+    @Transactional
+    public Map<String, String> solicitarRecuperacao(EsqueciSenhaRequestDTO dto) {
+        String cpfLimpo = dto.cpf().replaceAll("\\D", "");
+
+        var usuarioOpt = usuarioRepository.findByCpf(cpfLimpo);
+        if (usuarioOpt.isPresent()) {
+            Usuario usuario = usuarioOpt.get();
+            recuperacaoSenhaRepository.findByUsuarioAndUtilizadoFalse(usuario)
+                    .ifPresent(tokenAntigo -> {
+                        tokenAntigo.setUtilizado(true);
+                        recuperacaoSenhaRepository.save(tokenAntigo);
+                    });
+
+            String codigo = gerarCodigoDe6Digitos();
+            RecuperacaoSenha recuperacao = new RecuperacaoSenha();
+            recuperacao.setUsuario(usuario);
+            recuperacao.setCodigoConfirmacao(codigo);
+            recuperacao.setDataExpiracao(LocalDateTime.now().plusMinutes(EXPIRACAO_MINUTOS));
+            recuperacao.setUtilizado(false);
+            recuperacaoSenhaRepository.save(recuperacao);
+
+            log.info("[SIMULACAO EMAIL] Codigo para {}: {}", usuario.getEmail(), codigo);
+            return Map.of("emailMascarado", mascararEmail(usuario.getEmail()));
+        }
+
+        var pacienteOpt = pacienteRepository.findByCpf(cpfLimpo);
+        if (pacienteOpt.isPresent()) {
+            Paciente paciente = pacienteOpt.get();
+            recuperacaoSenhaRepository.findByPacienteAndUtilizadoFalse(paciente)
+                    .ifPresent(tokenAntigo -> {
+                        tokenAntigo.setUtilizado(true);
+                        recuperacaoSenhaRepository.save(tokenAntigo);
+                    });
+
+            String codigo = gerarCodigoDe6Digitos();
+            RecuperacaoSenha recuperacao = new RecuperacaoSenha();
+            recuperacao.setPaciente(paciente);
+            recuperacao.setCodigoConfirmacao(codigo);
+            recuperacao.setDataExpiracao(LocalDateTime.now().plusMinutes(EXPIRACAO_MINUTOS));
+            recuperacao.setUtilizado(false);
+            recuperacaoSenhaRepository.save(recuperacao);
+
+            String emailPaciente = cpfLimpo + "@paciente.hospital.com";
+            log.info("[SIMULACAO EMAIL] Codigo para {}: {}", emailPaciente, codigo);
+            return Map.of("emailMascarado", mascararEmail(emailPaciente));
+        }
+
+        throw new RuntimeException("Nenhum usuário ou paciente encontrado com este CPF.");
+    }
+
+    @Transactional
+    public void resetarSenha(ResetarSenhaRequestDTO dto) {
+        RecuperacaoSenha recuperacao = recuperacaoSenhaRepository
+                .findByCodigoConfirmacao(dto.codigo())
+                .orElseThrow(() -> new RuntimeException("Código de verificação inválido."));
+
+        if (recuperacao.getUtilizado()) {
+            throw new RuntimeException("Este código já foi utilizado. Solicite um novo.");
+        }
+        if (LocalDateTime.now().isAfter(recuperacao.getDataExpiracao())) {
+            throw new RuntimeException("Código expirado. Solicite um novo código de verificação.");
+        }
+
+        if (recuperacao.getUsuario() != null) {
+            Usuario usuario = recuperacao.getUsuario();
+            usuario.setSenha(passwordEncoder.encode(dto.novaSenha()));
+            usuarioRepository.save(usuario);
+        } else if (recuperacao.getPaciente() != null) {
+            Paciente paciente = recuperacao.getPaciente();
+            paciente.setSenha(passwordEncoder.encode(dto.novaSenha()));
+            pacienteRepository.save(paciente);
+        }
+
+        recuperacao.setUtilizado(true);
+        recuperacaoSenhaRepository.save(recuperacao);
+    }
+
+    private String gerarCodigoDe6Digitos() {
+        SecureRandom random = new SecureRandom();
+        int numero = 100000 + random.nextInt(900000);
+        return String.valueOf(numero);
+    }
+
+    private String mascararEmail(String email) {
+        if (email == null || !email.contains("@")) return "***@***.com";
+        String[] partes = email.split("@");
+        String usuario = partes[0];
+        String dominio = partes[1];
+        if (usuario.length() <= 1) return email;
+        return usuario.charAt(0) + "****@" + dominio;
+    }
+}
+
+================================================================================
+ARQUIVO: api/src/main/java/com/hospital/api/service/ChamadoService.java
+================================================================================
+package com.hospital.api.service;
+
+import com.hospital.api.dto.request.AvaliacaoRequestDTO;
+import com.hospital.api.dto.request.ChamadoAtualizacaoDTO;
+import com.hospital.api.dto.request.ChamadoRequestDTO;
+import com.hospital.api.dto.request.PedidoRapidoRequestDTO;
+import com.hospital.api.dto.request.FinalizarChamadoRequestDTO;
+import com.hospital.api.dto.response.ChamadoResponseDTO;
+import com.hospital.api.entity.Chamado;
+import com.hospital.api.entity.Leito;
+import com.hospital.api.entity.Paciente;
+import com.hospital.api.entity.Servico;
+import com.hospital.api.entity.Usuario;
+import com.hospital.api.enums.StatusChamado;
+import com.hospital.api.enums.TipoChamado;
+import com.hospital.api.repository.ChamadoRepository;
+import com.hospital.api.repository.PacienteRepository;
+import com.hospital.api.repository.LeitoRepository;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Service
+public class ChamadoService {
+
+    private final ChamadoRepository chamadoRepository;
+    private final PacienteRepository pacienteRepository;
+    private final LeitoRepository leitoRepository;
+
+    public ChamadoService(ChamadoRepository chamadoRepository,
+                          PacienteRepository pacienteRepository,
+                          LeitoRepository leitoRepository) {
+        this.chamadoRepository = chamadoRepository;
+        this.pacienteRepository = pacienteRepository;
+        this.leitoRepository = leitoRepository;
+    }
+
+    @Transactional
+    public ChamadoResponseDTO abrirChamado(ChamadoRequestDTO dto) {
+        Paciente paciente = resolverPaciente(dto.idPaciente());
+        Chamado chamado = new Chamado();
+        chamado.setPaciente(paciente);
+
+        Leito leito = null;
+        if (dto.idLeito() != null) {
+            leito = leitoRef(dto.idLeito());
+        } else if (paciente.getLeito() != null && !paciente.getLeito().isBlank()) {
+            leito = leitoRepository.findByNumero(paciente.getLeito()).orElse(null);
+        }
+        chamado.setLeito(leito);
+        chamado.setServico(dto.idServico() != null ? servicoRef(dto.idServico()) : null);
+        chamado.setObservacao(dto.observacao() != null ? dto.observacao() : "Chamado aberto via app.");
+        chamado.setStatus(StatusChamado.ABERTO);
+        chamado.setPrioridade("MEDIA");
+        chamado.setDataAbertura(LocalDateTime.now());
+        chamado.setTipo(dto.tipo() != null ? dto.tipo() : TipoChamado.ENFERMAGEM);
+
+        chamadoRepository.save(chamado);
+        return new ChamadoResponseDTO(chamado);
+    }
+
+    @Transactional
+    public ChamadoResponseDTO confirmarAtendimento(Long idChamado) {
+        Chamado chamado = chamadoRepository.findById(idChamado)
+                .orElseThrow(() -> new RuntimeException("Chamado #" + idChamado + " não encontrado."));
+        if (chamado.getStatus() != StatusChamado.ABERTO) {
+            throw new RuntimeException("Chamado #" + idChamado + " já está " + chamado.getStatus().name());
+        }
+        chamado.setStatus(StatusChamado.EM_ATENDIMENTO);
+        chamado.setDataInicioAtend(LocalDateTime.now());
+        chamadoRepository.save(chamado);
+        return new ChamadoResponseDTO(chamado);
+    }
+
+    @Transactional
+    public ChamadoResponseDTO finalizarAtendimento(Long idChamado, FinalizarChamadoRequestDTO dto) {
+        Chamado chamado = chamadoRepository.findById(idChamado)
+                .orElseThrow(() -> new RuntimeException("Chamado #" + idChamado + " não encontrado."));
+        if (chamado.getStatus() != StatusChamado.EM_ATENDIMENTO) {
+            throw new RuntimeException("Apenas chamados EM_ATENDIMENTO podem ser finalizados.");
+        }
+        chamado.setStatus(StatusChamado.CONCLUIDO);
+        chamado.setDescricaoResolucao(dto.descricaoResolucao());
+        chamado.setDataConclusao(LocalDateTime.now());
+        chamadoRepository.save(chamado);
+        return new ChamadoResponseDTO(chamado);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ChamadoResponseDTO> listarTodos() {
+        return chamadoRepository.findAll().stream().map(ChamadoResponseDTO::new).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<ChamadoResponseDTO> listarPorPaciente(Long idPaciente) {
+        return chamadoRepository.findByPacienteIdPaciente(idPaciente).stream().map(ChamadoResponseDTO::new).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public ChamadoResponseDTO buscarPorId(Long id) {
+        return chamadoRepository.findById(id).map(ChamadoResponseDTO::new)
+                .orElseThrow(() -> new RuntimeException("Chamado não encontrado"));
+    }
+
+    @Transactional(readOnly = true)
+    public List<ChamadoResponseDTO> listarAtivos() {
+        return chamadoRepository.findByStatusIn(
+                List.of(StatusChamado.ABERTO, StatusChamado.EM_ATENDIMENTO, StatusChamado.CONCLUIDO)
+        ).stream().map(ChamadoResponseDTO::new).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<ChamadoResponseDTO> listarPorStatus(StatusChamado status) {
+        return chamadoRepository.findByStatus(status).stream().map(ChamadoResponseDTO::new).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<ChamadoResponseDTO> listarPorTipo(TipoChamado tipo) {
+        return chamadoRepository.findByTipo(tipo).stream().map(ChamadoResponseDTO::new).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<ChamadoResponseDTO> listarPorCategoria(Integer idCategoria) {
+        return chamadoRepository.findByServicoCategoriaIdCategoria(idCategoria)
+                .stream().map(ChamadoResponseDTO::new).toList();
+    }
+
+    @Transactional
+    public ChamadoResponseDTO atualizarChamado(Long id, ChamadoAtualizacaoDTO dto) {
+        Chamado chamado = chamadoRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Chamado não encontrado"));
+        if (dto.status() != null) chamado.setStatus(dto.status());
+        if (dto.observacao() != null) chamado.setObservacao(dto.observacao());
+        chamadoRepository.save(chamado);
+        return new ChamadoResponseDTO(chamado);
+    }
+
+    @Transactional
+    public void deletarChamado(Long id) {
+        chamadoRepository.findById(id).orElseThrow(() -> new RuntimeException("Chamado não encontrado"));
+        chamadoRepository.deleteById(id);
+    }
+
+    @Transactional
+    public ChamadoResponseDTO avaliarChamado(Long idChamado, AvaliacaoRequestDTO dto) {
+        Chamado chamado = chamadoRepository.findById(idChamado)
+                .orElseThrow(() -> new RuntimeException("Chamado #" + idChamado + " não encontrado."));
+        if (chamado.getStatus() != StatusChamado.CONCLUIDO && chamado.getStatus() != StatusChamado.FINALIZADO) {
+            throw new IllegalStateException("Somente chamados CONCLUIDOS ou FINALIZADOS podem ser avaliados.");
+        }
+        chamado.setNotaAvaliacao(dto.nota());
+        chamado.setComentarioAvaliacao(dto.comentario());
+        chamado.setStatus(StatusChamado.FINALIZADO);
+        chamadoRepository.save(chamado);
+        return new ChamadoResponseDTO(chamado);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ChamadoResponseDTO> obterHistorico24Horas(Long idPaciente) {
+        LocalDateTime desde = LocalDateTime.now().minusHours(24);
+        List<StatusChamado> statusFinais = List.of(StatusChamado.FINALIZADO, StatusChamado.CANCELADO);
+        return chamadoRepository.findByPacienteIdPacienteAndStatusInAndDataConclusaoAfter(idPaciente, statusFinais, desde)
+                .stream().map(ChamadoResponseDTO::new).toList();
+    }
+
+    private Paciente resolverPaciente(Long idPaciente) {
+        if (idPaciente != null) {
+            return pacienteRepository.findById(idPaciente)
+                    .orElseThrow(() -> new RuntimeException("Paciente #" + idPaciente + " não encontrado."));
+        }
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        var usuario = (Usuario) auth.getPrincipal();
+        return pacienteRepository.findByCpf(usuario.getCpf())
+                .orElseThrow(() -> new RuntimeException("Paciente correspondente ao usuário logado não encontrado."));
+    }
+
+    private Leito leitoRef(Integer idLeito) {
+        Leito l = new Leito(); l.setIdLeito(idLeito); return l;
+    }
+
+    private Servico servicoRef(Integer idServico) {
+        Servico s = new Servico(); s.setIdServico(idServico); return s;
+    }
+}

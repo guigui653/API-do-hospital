@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fila de Triagem - Cuidar+</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; padding: 20px; }
+        .container { max-width: 950px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h2 { color: #00565b; border-bottom: 2px solid #00565b; padding-bottom: 10px; margin-top: 0; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #00565b; color: white; }
+        .urgencia-verde { background-color: #d4edda; color: #155724; padding: 5px 10px; border-radius: 4px; font-weight: bold; }
+        .urgencia-amarelo { background-color: #fff3cd; color: #856404; padding: 5px 10px; border-radius: 4px; font-weight: bold; }
+        .urgencia-vermelho { background-color: #f8d7da; color: #721c24; padding: 5px 10px; border-radius: 4px; font-weight: bold; }
+        .mensagem-vazia { text-align: center; color: #777; font-style: italic; margin-top: 20px; }
+
+        /* Estilo do botão de chamar paciente */
+        .btn-atender { background-color: #007973; color: white; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.2s; }
+        .btn-atender:hover { background-color: #00565b; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Fila de Atendimento Médico</h2>
+    <table>
+        <thead>
+        <tr>
+            <th>Chamada</th>
+            <th>Nome do Paciente</th>
+            <th>Sintomas</th>
+            <th>Classificação</th>
+            <th>Ação</th> </tr>
+        </thead>
+        <tbody id="tabelaPacientes">
+        </tbody>
+    </table>
+    <div id="mensagem" class="mensagem-vazia">Carregando pacientes...</div>
+</div>
+
+<script>
+    async function carregarFila() {
+        try {
+            const response = await fetch('http://localhost:8080/api/triagem');
+            const pacientes = await response.json();
+
+            const tbody = document.getElementById('tabelaPacientes');
+            const mensagem = document.getElementById('mensagem');
+
+            tbody.innerHTML = '';
+
+            if (pacientes.length === 0) {
+                mensagem.innerText = "Nenhum paciente na fila no momento.";
+                mensagem.style.display = 'block';
+                return;
+            }
+
+            mensagem.style.display = 'none';
+
+            pacientes.forEach(paciente => {
+                let classeCor = "urgencia-verde";
+
+                // 👇 CORREÇÃO: Lendo 'urgencia' (com trava de segurança caso venha vazio do banco)
+                let cor = (paciente.urgencia || "").toLowerCase();
+
+                if (cor.includes("amarelo")) classeCor = "urgencia-amarelo";
+                if (cor.includes("vermelho")) classeCor = "urgencia-vermelho";
+
+                const tr = document.createElement('tr');
+
+                // 👇 CORREÇÃO: Variáveis idtriagem e nomePaciente alinhadas com o Java
+                tr.innerHTML = `
+                    <td><strong>#${paciente.idtriagem}</strong></td>
+                    <td>${paciente.nomePaciente}</td>
+                    <td>${paciente.sintomas}</td>
+                    <td><span class="${classeCor}">${paciente.urgencia}</span></td>
+                    <td>
+                        <button class="btn-atender" onclick="atenderPaciente(${paciente.idtriagem})">Chamar</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        } catch (error) {
+            console.error("Erro ao buscar dados:", error);
+            document.getElementById('mensagem').innerText = "Erro ao conectar com o servidor.";
+        }
+    }
+
+    // FUNÇÃO QUE MANDA O DELETE PARA O JAVA
+    async function atenderPaciente(id) {
+        if (confirm("Confirmar atendimento do paciente #" + id + " e removê-lo da fila?")) {
+            try {
+                const response = await fetch(`http://localhost:8080/api/triagem/${id}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    carregarFila(); // Recarrega a tabela na mesma hora!
+                } else {
+                    alert("Erro ao atender paciente.");
+                }
+            } catch (error) {
+                console.error("Erro ao deletar:", error);
+                alert("Erro de conexão com o servidor.");
+            }
+        }
+    }
+
+    carregarFila();
+</script>
+
+</body>
+</html>

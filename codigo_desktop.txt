@@ -1,0 +1,523 @@
+================================================================================
+PROJETO: Cuidar Plus — Aplicativo Desktop React + Vite + TypeScript
+ATUALIZADO EM: 2026-06-20
+TECNOLOGIAS: React 19, Vite, TypeScript, React Router DOM v6, Axios, StompJS, SockJS
+AUTENTICACAO: CPF/senha via backend Java local (JWT). Sem Firebase.
+API: http://localhost:8080 (variável VITE_API_URL)
+================================================================================
+
+================================================================================
+ARQUIVO: cuidar-plus-desktop/src/App.tsx
+================================================================================
+import React from 'react';
+import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
+
+import { AuthProvider, useAuth } from './hooks/useAuth';
+import Sidebar          from './components/Sidebar';
+import TopBar           from './components/TopBar';
+import LoginPage        from './pages/LoginPage';
+import TriagemPage      from './pages/TriagemPage';
+import DashboardPage    from './pages/DashboardPage';
+import AtendimentosPage from './pages/AtendimentosPage';
+import MeuPerfilPage    from './pages/MeuPerfilPage';
+
+const PrivateRoute: React.FC = () => {
+  const { isAuthenticated } = useAuth();
+  return isAuthenticated ? <Outlet /> : <Navigate to="/login" replace />;
+};
+
+const AppLayout: React.FC = () => (
+  <div className="app-shell">
+    <Sidebar />
+    <div className="main-content">
+      <TopBar />
+      <main className="page-body">
+        <Outlet />
+      </main>
+    </div>
+  </div>
+);
+
+const AppRoutes: React.FC = () => {
+  const { isAuthenticated } = useAuth();
+
+  return (
+    <Routes>
+      <Route
+        path="/login"
+        element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <LoginPage />}
+      />
+      <Route element={<PrivateRoute />}>
+        <Route element={<AppLayout />}>
+          <Route path="/dashboard"    element={<AtendimentosPage />} />
+          <Route path="/triagem"      element={<TriagemPage />} />
+          <Route path="/notificacoes" element={<DashboardPage />} />
+          <Route path="/perfil"       element={<MeuPerfilPage />} />
+        </Route>
+      </Route>
+      <Route path="*" element={<Navigate to="/login" replace />} />
+    </Routes>
+  );
+};
+
+const App: React.FC = () => (
+  <BrowserRouter>
+    <AuthProvider>
+      <AppRoutes />
+    </AuthProvider>
+  </BrowserRouter>
+);
+
+export default App;
+
+================================================================================
+ARQUIVO: cuidar-plus-desktop/src/services/api.ts
+NOTA: Axios configurado para o backend Java local. Injeta JWT do localStorage.
+================================================================================
+import axios from 'axios';
+import type { ChamadoWS } from '../types/chamado';
+
+const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8080';
+
+const api = axios.create({
+  baseURL: API_BASE,
+  headers: { 'Content-Type': 'application/json' },
+  timeout: 10_000,
+});
+
+api.interceptors.request.use((config) => {
+  let token: string | null = null;
+
+  const stored = localStorage.getItem('cuidar_user');
+  if (stored) {
+    try {
+      const user = JSON.parse(stored);
+      if (user?.token) token = user.token;
+    } catch {  }
+  }
+
+  if (!token) {
+    token = localStorage.getItem('@CuidarPlus:token');
+  }
+
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+
+  return config;
+});
+
+export const authService = {
+  login: (cpf: string, senha: string) =>
+    api.post<{ token: string; nome?: string; role?: string }>(
+      '/api/auth/login', { cpf, senha }
+    ),
+
+  logout: () => api.post('/api/auth/logout').catch(() => {}),
+};
+
+export interface TriagemPayload {
+  pacienteNome: string;
+  cpf: string;
+  idade: number | null;
+  pressaoArterial: string;
+  temperatura: number | null;
+  alergias: string;
+  sintomas: string;
+  nivelUrgencia: string;
+}
+
+export const triagemService = {
+  enviar: (payload: TriagemPayload) =>
+    api.post('/api/triagem', payload),
+};
+
+export const pacienteService = {
+  listar: () => api.get('/pacientes'),
+  buscarPorId: (id: number | string) => api.get(`/pacientes/${id}`),
+};
+
+export const chamadoService = {
+  listarAtivos: () =>
+    api.get<ChamadoWS[]>('/chamados/ativos'),
+
+  listarPorTipo: (tipo: string) =>
+    api.get<ChamadoWS[]>(`/chamados/tipo/${tipo}`),
+
+  listarTodos: () =>
+    api.get<ChamadoWS[]>('/chamados'),
+
+  confirmar: (id: number) =>
+    api.put<ChamadoWS>(`/chamados/${id}/confirmar`),
+
+  finalizar: (id: number, descricaoResolucao: string) =>
+    api.put<ChamadoWS>(`/chamados/${id}/finalizar`, { descricaoResolucao }),
+
+  // Chamados finalizados — no backend o status é 'CONCLUIDO' (não 'FINALIZADO')
+  listarFinalizados: () =>
+    api.get<ChamadoWS[]>('/chamados/status/CONCLUIDO'),
+
+  listarHistoricoSetor: (tipo: string) =>
+    api.get<ChamadoWS[]>(`/chamados/tipo/${tipo}`),
+
+  cancelar: (id: number) =>
+    api.put<ChamadoWS>(`/chamados/${id}`, { status: 'CANCELADO' }),
+};
+
+export default api;
+
+================================================================================
+ARQUIVO: cuidar-plus-desktop/src/hooks/useAuth.tsx
+NOTA: Autenticação por CPF/senha com JWT do backend Java. Sem Firebase.
+================================================================================
+import React, { createContext, useContext, useState, useCallback } from 'react';
+
+interface User {
+  name: string;
+  cpf: string;
+  role: string;
+  sector: string;
+  medicalId: string;
+  email: string;
+  token: string;
+}
+
+interface AuthContextType {
+  user: User | null;
+  isAuthenticated: boolean;
+  login: (cpf: string, password: string) => Promise<void>;
+  logout: () => void;
+}
+
+const AuthContext = createContext<AuthContextType | null>(null);
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [user, setUser] = useState<User | null>(() => {
+    const stored = localStorage.getItem('cuidar_user');
+    return stored ? JSON.parse(stored) : null;
+  });
+
+  const login = useCallback(async (cpf: string, password: string) => {
+    const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8080';
+    const res = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cpf: cpf.replace(/\D/g, ''), senha: password }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.message ?? `Erro ${res.status}: CPF ou senha incorretos.`);
+    }
+
+    const data: { token: string; nome?: string; role?: string } = await res.json();
+
+    const loggedUser: User = {
+      name: data.nome ?? 'Colaborador',
+      cpf,
+      role: data.role ?? 'COLABORADOR',
+      sector: '',
+      medicalId: '',
+      email: '',
+      token: data.token,
+    };
+
+    localStorage.setItem('cuidar_user', JSON.stringify(loggedUser));
+    setUser(loggedUser);
+  }, []);
+
+  const logout = useCallback(() => {
+    localStorage.removeItem('cuidar_user');
+    setUser(null);
+  }, []);
+
+  return (
+    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export const useAuth = (): AuthContextType => {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth deve ser usado dentro de <AuthProvider>');
+  return ctx;
+};
+
+================================================================================
+ARQUIVO: cuidar-plus-desktop/src/hooks/useWebSocket.ts
+NOTA: WebSocket via STOMP/SockJS conectando ao endpoint /ws-sock do backend Java.
+================================================================================
+import { useEffect, useRef, useCallback } from 'react';
+import { Client, type IMessage, type StompSubscription } from '@stomp/stompjs';
+import SockJS from 'sockjs-client';
+import type { ChamadoWS } from '../types/chamado';
+
+export type { ChamadoWS };
+
+export interface UsePainelWebSocketOptions {
+  onChamadoRecebido: (chamado: ChamadoWS) => void;
+  apiUrl?: string;
+  ativo?: boolean;
+}
+
+export function usePainelWebSocket({
+  onChamadoRecebido,
+  apiUrl = 'http://localhost:8080',
+  ativo = true,
+}: UsePainelWebSocketOptions): void {
+  const clientRef       = useRef<Client | null>(null);
+  const subscriptionRef = useRef<StompSubscription | null>(null);
+  const callbackRef     = useRef(onChamadoRecebido);
+
+  useEffect(() => {
+    callbackRef.current = onChamadoRecebido;
+  }, [onChamadoRecebido]);
+
+  const conectar = useCallback(() => {
+    if (!ativo) return;
+
+    console.log('[Painel WS] 🔌 Conectando via STOMP/SockJS...');
+
+    const client = new Client({
+      webSocketFactory: () => new SockJS(`${apiUrl}/ws-sock`),
+      reconnectDelay: 5000,
+      heartbeatIncoming: 4000,
+      heartbeatOutgoing: 4000,
+      debug: (msg) => console.debug('[Painel WS]', msg),
+
+      onConnect: () => {
+        console.log('[Painel WS] ✅ Conectado! Subscrito em /topic/painel');
+        subscriptionRef.current = client.subscribe(
+          '/topic/painel',
+          (message: IMessage) => {
+            try {
+              const chamado: ChamadoWS = JSON.parse(message.body);
+              console.log('[Painel WS] 📩 Chamado recebido:', chamado);
+              callbackRef.current(chamado);
+            } catch (err) {
+              console.error('[Painel WS] ❌ Erro ao parsear mensagem:', err);
+            }
+          }
+        );
+      },
+
+      onStompError: (frame) => {
+        console.error('[Painel WS] ❌ Erro STOMP:', frame);
+      },
+
+      onDisconnect: () => {
+        console.warn('[Painel WS] 🔴 Desconectado.');
+        subscriptionRef.current = null;
+      },
+    });
+
+    client.activate();
+    clientRef.current = client;
+  }, [ativo, apiUrl]);
+
+  useEffect(() => {
+    conectar();
+
+    return () => {
+      if (subscriptionRef.current) {
+        subscriptionRef.current.unsubscribe();
+        subscriptionRef.current = null;
+      }
+      if (clientRef.current?.active) {
+        console.log('[Painel WS] 🧹 Desconectando (componente desmontado).');
+        clientRef.current.deactivate();
+        clientRef.current = null;
+      }
+    };
+  }, [conectar]);
+}
+
+================================================================================
+ARQUIVO: cuidar-plus-desktop/src/pages/LoginPage.tsx
+NOTA: Login por CPF/senha. Inclui modal de recuperação de senha com código de 6 dígitos.
+================================================================================
+import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../hooks/useAuth';
+import axios from 'axios';
+
+const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8080';
+
+const maskCPF = (value: string): string => {
+  const digits = value.replace(/\D/g, '').slice(0, 11);
+  return digits
+    .replace(/(\d{3})(\d)/, '$1.$2')
+    .replace(/(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
+    .replace(/(\d{3})\.(\d{3})\.(\d{3})(\d)/, '$1.$2.$3-$4');
+};
+
+type RecoveryStep = 'solicitar' | 'resetar' | 'sucesso';
+
+interface RecoveryModalProps {
+  onClose: () => void;
+}
+
+const RecoveryModal: React.FC<RecoveryModalProps> = ({ onClose }) => {
+  const [step, setStep] = useState<RecoveryStep>('solicitar');
+  const [cpf, setCpf] = useState('');
+  const [emailMascarado, setEmailMascarado] = useState('');
+  const [codigo, setCodigo] = useState('');
+  const [novaSenha, setNovaSenha] = useState('');
+  const [confirmarSenha, setConfirmarSenha] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [erro, setErro] = useState('');
+
+  const handleSolicitarCodigo = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const digits = cpf.replace(/\D/g, '');
+    if (digits.length !== 11) { setErro('Informe um CPF válido com 11 dígitos.'); return; }
+    setErro('');
+    setLoading(true);
+    try {
+      const { data } = await axios.post(`${API_BASE}/api/auth/esqueci-senha`, { cpf: digits });
+      setEmailMascarado(data.emailMascarado);
+      setStep('resetar');
+    } catch (err: any) {
+      setErro(err?.response?.data?.erro ?? 'CPF não encontrado no sistema.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResetarSenha = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (codigo.length !== 6) { setErro('O código deve ter 6 dígitos.'); return; }
+    if (novaSenha.length < 6) { setErro('A senha deve ter no mínimo 6 caracteres.'); return; }
+    if (novaSenha !== confirmarSenha) { setErro('As senhas não coincidem.'); return; }
+    setErro('');
+    setLoading(true);
+    try {
+      await axios.post(`${API_BASE}/api/auth/resetar-senha`, { codigo, novaSenha });
+      setStep('sucesso');
+    } catch (err: any) {
+      setErro(err?.response?.data?.erro ?? 'Código inválido ou expirado.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // [Componente visual abreviado — lógica idêntica ao arquivo fonte LoginPage.tsx]
+  // O modal exibe 3 etapas:
+  // 1. 'solicitar' → campo CPF → POST /api/auth/esqueci-senha
+  // 2. 'resetar'   → campos código (6 dígitos) + nova senha + confirmação → POST /api/auth/resetar-senha
+  // 3. 'sucesso'   → botão "Ir para o Login"
+  return null; // Representação simplificada — ver arquivo fonte completo
+};
+
+const LoginPage: React.FC = () => {
+  const { login } = useAuth();
+  const navigate = useNavigate();
+
+  const [cpf, setCpf]               = useState('');
+  const [senha, setSenha]           = useState('');
+  const [showPass, setShowPass]     = useState(false);
+  const [loading, setLoading]       = useState(false);
+  const [error, setError]           = useState('');
+  const [showRecovery, setShowRecovery] = useState(false);
+
+  const handleCpfChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setCpf(maskCPF(e.target.value));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (!cpf || !senha) { setError('Preencha o CPF e a senha para continuar.'); return; }
+    if (senha.length < 4) { setError('A senha deve ter pelo menos 4 caracteres.'); return; }
+    setLoading(true);
+    try {
+      await login(cpf, senha);
+      navigate('/triagem');
+    } catch {
+      setError('CPF ou senha inválidos. Tente novamente.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Interface com:
+  // - Campo CPF com máscara (maskCPF)
+  // - Campo senha com toggle de visibilidade
+  // - Botão "Esqueceu sua senha?" → abre <RecoveryModal>
+  // - Botão "Entrar" → chama handleSubmit → login() → navigate('/triagem')
+  return null; // Representação simplificada — ver arquivo fonte completo
+};
+
+export default LoginPage;
+
+================================================================================
+ESTRUTURA DE PASTAS DO DESKTOP (cuidar-plus-desktop/src/)
+================================================================================
+
+src/
+├── App.tsx                    → Rotas, AuthProvider, AppLayout (Sidebar + TopBar)
+├── App.css                    → Estilos globais do shell
+├── index.css                  → Variáveis CSS e reset global
+├── main.tsx                   → Ponto de entrada (ReactDOM.createRoot)
+│
+├── hooks/
+│   ├── useAuth.tsx            → Contexto de autenticação CPF/senha (localStorage)
+│   └── useWebSocket.ts        → Hook STOMP/SockJS para receber chamados em tempo real
+│
+├── services/
+│   └── api.ts                 → Instância Axios + interceptor JWT + chamadoService + authService
+│
+├── pages/
+│   ├── LoginPage.tsx          → Tela de login + modal de recuperação de senha
+│   ├── AtendimentosPage.tsx   → Painel principal de chamados (WebSocket + REST)
+│   ├── TriagemPage.tsx        → Formulário e fila de triagem
+│   ├── DashboardPage.tsx      → Gráficos e métricas
+│   ├── MeuPerfilPage.tsx      → Dados do colaborador logado
+│   ├── AdminPage.tsx          → Página administrativa (placeholder)
+│   └── AvisosPage.tsx         → Avisos e notificações (placeholder)
+│
+├── components/
+│   ├── Sidebar.tsx            → Menu lateral de navegação
+│   └── TopBar.tsx             → Barra superior com nome do usuário e logout
+│
+└── types/
+    └── chamado.ts             → Interface ChamadoWS (tipagem compartilhada)
+
+================================================================================
+FLUXO DE AUTENTICAÇÃO DO DESKTOP
+================================================================================
+
+1. Colaborador acessa /login
+2. Digita CPF (com máscara) + senha
+3. useAuth.login() faz POST /api/auth/login no backend Java
+4. Backend valida CPF/senha via Spring Security + BCrypt + PostgreSQL
+5. Backend retorna { token, nome, role } (JWT com validade de 30 dias)
+6. Frontend salva em localStorage['cuidar_user']
+7. Interceptor Axios injeta o token em todas as requisições subsequentes
+8. Rota protegida (PrivateRoute) lê isAuthenticated → redireciona para /triagem
+
+================================================================================
+ENDPOINTS DO BACKEND USADOS PELO DESKTOP
+================================================================================
+
+POST   /api/auth/login            → Autenticação CPF/senha → retorna JWT
+POST   /api/auth/esqueci-senha    → Solicita código de recuperação (6 dígitos)
+POST   /api/auth/resetar-senha    → Redefine senha com código
+
+GET    /chamados/ativos           → Lista chamados ativos
+GET    /chamados                  → Lista todos os chamados
+GET    /chamados/status/CONCLUIDO → Lista chamados finalizados
+GET    /chamados/tipo/{tipo}      → Lista por tipo (ENFERMAGEM, MEDICO, etc.)
+PUT    /chamados/{id}/confirmar   → Confirma atendimento (status: EM_ATENDIMENTO)
+PUT    /chamados/{id}/finalizar   → Finaliza atendimento (status: CONCLUIDO)
+PUT    /chamados/{id}             → Atualização genérica (ex: status: CANCELADO)
+
+POST   /api/triagem               → Registra novo paciente na triagem
+GET    /api/triagem               → Lista fila de triagem (ordenada por urgência)
+DELETE /api/triagem/{id}          → Remove paciente da fila (atendido)
+
+GET    /pacientes                 → Lista pacientes
+GET    /pacientes/{id}            → Busca paciente por ID
+
+WS     ws://localhost:8080/ws-sock  → WebSocket STOMP (topic: /topic/painel)

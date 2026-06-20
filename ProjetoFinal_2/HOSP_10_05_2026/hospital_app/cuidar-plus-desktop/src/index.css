@@ -1,0 +1,421 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+/* =========================================
+   CUIDAR+ — Design System Global
+   ========================================= */
+:root {
+  /* Cores Institucionais */
+  --primary:         #004b49;
+  --primary-hover:   #1a6b65;
+  --primary-light:   #e8f4f3;
+  --accent:          #0d8389;
+  --accent-light:    #98e6ec;
+
+  /* Backgrounds */
+  --bg-app:          #f0f4f4;
+  --bg-white:        #ffffff;
+  --bg-sidebar:      #004b49;
+
+  /* Texto */
+  --text-dark:       #1a1a1a;
+  --text-muted:      #6b7280;
+  --text-white:      #ffffff;
+
+  /* Urgência */
+  --urgency-red:     #ef4444;
+  --urgency-yellow:  #f59e0b;
+  --urgency-green:   #22c55e;
+
+  /* Status */
+  --status-done-bg:    #dcfce7;
+  --status-done-text:  #16a34a;
+  --status-active-bg:  #fef9c3;
+  --status-active-text:#92400e;
+  --status-cancel-bg:  #fee2e2;
+  --status-cancel-text:#b91c1c;
+
+  /* Bordas e sombras */
+  --border:          #e5e7eb;
+  --border-focus:    #0d8389;
+  --shadow-card:     0 2px 12px rgba(0, 75, 73, 0.08);
+  --shadow-focus:    0 0 0 3px rgba(152, 230, 236, 0.45);
+
+  /* Layout */
+  --sidebar-width:   80px;
+  --topbar-height:   56px;
+  --radius-sm:       8px;
+  --radius-md:       12px;
+  --radius-lg:       16px;
+
+  /* Tipografia */
+  --font-family:     'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* =========================================
+   RESET
+   ========================================= */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  font-family: var(--font-family);
+  background-color: var(--bg-app);
+  color: var(--text-dark);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* =========================================
+   LAYOUT PRINCIPAL (com sidebar)
+   ========================================= */
+.app-shell {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.page-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 28px 32px;
+}
+
+/* =========================================
+   TIPOGRAFIA
+   ========================================= */
+h1 { font-size: 24px; font-weight: 700; color: var(--text-dark); }
+h2 { font-size: 20px; font-weight: 700; color: var(--text-dark); }
+h3 { font-size: 16px; font-weight: 600; color: var(--text-dark); }
+
+/* =========================================
+   BOTÕES
+   ========================================= */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.18s, transform 0.1s, opacity 0.18s;
+}
+.btn:active { transform: scale(0.98); }
+
+.btn-primary {
+  background: var(--primary);
+  color: var(--text-white);
+}
+.btn-primary:hover { background: var(--primary-hover); }
+
+.btn-outline {
+  background: transparent;
+  color: var(--text-dark);
+  border: 1.5px solid var(--border);
+}
+.btn-outline:hover { background: var(--bg-app); }
+
+.btn-danger {
+  background: transparent;
+  color: var(--urgency-red);
+  border: 1.5px solid #fca5a5;
+}
+.btn-danger:hover { background: #fee2e2; }
+
+.btn-sm { padding: 7px 12px; font-size: 13px; }
+.btn-full { width: 100%; justify-content: center; }
+.btn-lg { padding: 14px 24px; font-size: 16px; }
+
+/* =========================================
+   INPUTS
+   ========================================= */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.form-input,
+.form-select,
+.form-textarea {
+  width: 100%;
+  padding: 11px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family);
+  font-size: 14px;
+  color: var(--text-dark);
+  background: var(--bg-white);
+  transition: border-color 0.2s, box-shadow 0.2s;
+  outline: none;
+}
+.form-input:focus,
+.form-select:focus,
+.form-textarea:focus {
+  border-color: var(--border-focus);
+  box-shadow: var(--shadow-focus);
+}
+.form-textarea { resize: vertical; }
+
+.input-wrapper {
+  position: relative;
+}
+.input-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: 16px;
+  pointer-events: none;
+}
+.input-wrapper .form-input { padding-left: 38px; }
+.input-action {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 16px;
+  padding: 0;
+  line-height: 1;
+}
+
+/* =========================================
+   CARDS
+   ========================================= */
+.card {
+  background: var(--bg-white);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  border: 1px solid rgba(0,75,73,0.06);
+}
+.card-body { padding: 20px; }
+.card-sm { border-radius: var(--radius-sm); }
+
+/* =========================================
+   BADGE / STATUS
+   ========================================= */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.badge-done    { background: var(--status-done-bg);   color: var(--status-done-text); }
+.badge-active  { background: var(--status-active-bg); color: var(--status-active-text); }
+.badge-cancel  { background: var(--status-cancel-bg); color: var(--status-cancel-text); }
+
+/* =========================================
+   URGENCY DOTS
+   ========================================= */
+.urgency-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.urgency-dot.red    { background: var(--urgency-red); }
+.urgency-dot.yellow { background: var(--urgency-yellow); }
+.urgency-dot.green  { background: var(--urgency-green); }
+
+/* =========================================
+   ALERTA RISCO (Triagem)
+   ========================================= */
+.alerta-risco {
+  color: #c5221f;
+  font-size: 12px;
+  font-weight: 700;
+  background-color: #fce8e6;
+  padding: 5px 10px;
+  border-radius: 4px;
+  margin-top: 6px;
+}
+
+/* =========================================
+   SCROLLBAR CUSTOM
+   ========================================= */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #c7d2cf; border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+/* =========================================
+   TABS
+   ========================================= */
+.tabs-scroll-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.tabs-list {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 4px 0;
+  flex: 1;
+}
+.tabs-list::-webkit-scrollbar { display: none; }
+.tab-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1.5px solid var(--border);
+  border-radius: 20px;
+  background: var(--bg-white);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-dark);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.18s;
+}
+.tab-item:hover { border-color: var(--primary); color: var(--primary); }
+.tab-item.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--text-white);
+}
+.tab-arrow {
+  background: var(--bg-white);
+  border: 1.5px solid var(--border);
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.18s;
+}
+.tab-arrow:hover { border-color: var(--primary); color: var(--primary); }
+
+/* =========================================
+   AVATAR
+   ========================================= */
+.avatar {
+  border-radius: 50%;
+  background: #d1dbd9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-size: 20px;
+}
+.avatar-sm  { width: 36px; height: 36px; font-size: 16px; }
+.avatar-md  { width: 48px; height: 48px; font-size: 22px; }
+.avatar-lg  { width: 80px; height: 80px; font-size: 36px; }
+
+/* =========================================
+   TABLE
+   ========================================= */
+.table-wrapper {
+  overflow-x: auto;
+  border-radius: var(--radius-sm);
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+thead tr {
+  border-bottom: 2px solid var(--border);
+}
+th {
+  text-align: left;
+  padding: 10px 16px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: #f8fafa; }
+tbody tr.row-highlight-red   { background: #fff5f5; }
+tbody tr.row-highlight-yellow { background: #fffbeb; }
+
+/* =========================================
+   METRIC CARD (SLA)
+   ========================================= */
+.metric-card {
+  padding: 18px 20px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--primary-light);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.metric-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.metric-value {
+  font-size: 28px;
+  font-weight: 800;
+  color: #1d4ed8;
+  line-height: 1;
+}
+.metric-sub {
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* =========================================
+   SECTION TITLE
+   ========================================= */
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-dark);
+  margin-bottom: 16px;
+}

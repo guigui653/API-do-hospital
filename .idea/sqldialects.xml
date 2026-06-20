@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="SqlDialectMappings">
+    <file url="file://$PROJECT_DIR$/ProjetoFinal_2/HOSP_10_05_2026/hospital_app/api/migration_add_finalizado.sql" dialect="GenericSQL" />
+  </component>
+</project>

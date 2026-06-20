@@ -1,0 +1,140 @@
+### ==========================================
+### 0. AUTENTICAÇÃO (Obrigatório rodar primeiro!)
+### ==========================================
+
+### Login do Paciente (Gera e salva o Token automaticamente)
+POST http://localhost:8080/pacientes/login
+Content-Type: application/json
+
+{
+  "nome": "Guilherme Teste",
+  "email": "gui@teste.com",
+  "telefone": "61999999999",
+  "cpf": "11122233344",
+  "senha": "123"
+}
+
+> {%
+    // Esse script pega o token da resposta e salva numa variável global!
+    client.global.set("auth_token", response.body.token);
+%}
+
+
+### ==========================================
+### 1. CATÁLOGO (O que aparece no App do Paciente)
+### ==========================================
+
+### Listar todas as categorias
+GET http://localhost:8080/categorias
+Accept: application/json
+Authorization: Bearer {{auth_token}}
+
+### Listar serviços da categoria Nutrição (ID 1)
+GET http://localhost:8080/servicos/categoria/1
+Accept: application/json
+Authorization: Bearer {{auth_token}}
+
+
+### ==========================================
+### 2. PACIENTES
+### ==========================================
+
+### Cadastrar Paciente Carlos
+POST http://localhost:8080/pacientes
+Content-Type: application/json
+Authorization: Bearer {{auth_token}}
+
+{
+  "nome": "Carlos Mendes",
+  "cpf": "08116014048",
+  "dataNascimento": "1985-10-20",
+  "sexo": "M",
+  "telefoneContato": "61988887777",
+  "nomeResponsavel": "Ana Mendes",
+  "telefoneResponsavel": "61977776666",
+  "numeroProntuario": "PRONT-779",
+  "leito": "10A",
+  "senha": "senhaSegura123",
+  "ativo": true
+}
+
+### Listar Todos os Pacientes
+GET http://localhost:8080/pacientes
+Authorization: Bearer {{auth_token}}
+
+
+### ==========================================
+### 3. USUÁRIOS (Equipe do Hospital)
+### ==========================================
+
+### Cadastrar um Usuário (Perfil Hotelaria)
+POST http://localhost:8080/usuarios
+Content-Type: application/json
+Authorization: Bearer {{auth_token}}
+
+{
+  "nome": "Joana Silva",
+  "cpf": "81452693005",
+  "email": "joana.hotelaria@hospital.com",
+  "telefone": "61999998888",
+  "senha": "senhaSegura123",
+  "tipo": "HOTELARIA"
+}
+
+### Listar Todos os Usuários
+GET http://localhost:8080/usuarios
+Authorization: Bearer {{auth_token}}
+
+
+### ==========================================
+### 4. A JORNADA DO CHAMADO (Teste de SLA)
+### ==========================================
+
+### PASSO A: O Paciente cria um NOVO Chamado (Pede água)
+POST http://localhost:8080/chamados
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+{
+  "idPaciente": 1,
+  "idLeito": 1,
+  "idServico": 1,
+  "categoria": "ENFERMAGEM",
+  "observacao": "Paciente solicitando um copo de água urgente."
+}
+
+### >>> ATENÇÃO: Olhe no console qual foi o ID gerado no Passo A! <<<
+### >>> Coloque esse ID no lugar do número '1' nos Passos B e C. <<<
+
+### PASSO B: Roberto (Colaborador ID 2) INICIA o chamado
+PUT http://localhost:8080/chamados/1/iniciar/2
+Accept: application/json
+Authorization: Bearer {{auth_token}}
+
+### PASSO C: Roberto FINALIZA o chamado (Água entregue!)
+PUT http://localhost:8080/chamados/1/finalizar
+Accept: application/json
+Authorization: Bearer {{auth_token}}
+
+### Listar todos os chamados para ver o histórico
+GET http://localhost:8080/chamados
+Authorization: Bearer {{auth_token}}
+
+
+### ==========================================
+### 5. TESTES DE FILTROS (Painel da Equipe)
+### ==========================================
+
+### Ver apenas chamados ABERTOS (O que a equipe precisa atender agora)
+GET http://localhost:8080/chamados/status/ABERTO
+Authorization: Bearer {{auth_token}}
+
+### Ver apenas chamados CONCLUIDOS (Histórico de trabalho)
+GET http://localhost:8080/chamados/status/CONCLUIDO
+Authorization: Bearer {{auth_token}}
+
+### Painel da Nutrição: Ver apenas chamados da Categoria 1 (Água, Comida, etc)
+GET http://localhost:8080/chamados/categoria/1
+Authorization: Bearer {{auth_token}}
+
+

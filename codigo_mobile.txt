@@ -1,0 +1,552 @@
+================================================================================
+PROJETO: Cuidar Plus — Aplicativo Mobile React Native / Expo
+ATUALIZADO EM: 2026-06-20
+TECNOLOGIAS: React Native 0.81.5, Expo SDK 54, TypeScript
+AUTENTICACAO: 100% via CPF/senha. Firebase e Google Sign-In REMOVIDOS.
+API: Axios apontando para http://192.168.15.186:8080 (IP local Wi-Fi)
+================================================================================
+
+================================================================================
+ARQUIVO: Cuidar_Plus_v2/package.json
+================================================================================
+{
+  "name": "cuidar_plus_v2",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "test": "jest --config jest.config.js",
+    "test:watch": "jest --config jest.config.js --watch",
+    "test:coverage": "jest --config jest.config.js --coverage"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.0.3",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-navigation/bottom-tabs": "^7.17.1",
+    "@react-navigation/native": "^7.2.2",
+    "@react-navigation/stack": "^7.8.11",
+    "axios": "^1.17.0",
+    "expo": "~54.0.33",
+    "expo-auth-session": "~7.0.11",
+    "expo-constants": "~18.0.13",
+    "expo-crypto": "~15.0.9",
+    "expo-navigation-bar": "~5.0.10",
+    "expo-status-bar": "~3.0.9",
+    "expo-web-browser": "~15.0.11",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-gesture-handler": "~2.28.0",
+    "react-native-keyboard-aware-scroll-view": "^0.9.5",
+    "react-native-masked-text": "^1.13.0",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0",
+    "react-native-web": "^0.21.0"
+  },
+  "devDependencies": {
+    "@testing-library/react-native": "^12.9.0",
+    "@types/jest": "^29.5.0",
+    "@types/react": "~19.1.0",
+    "@types/react-native": "^0.72.8",
+    "jest": "^29.7.0",
+    "jest-expo": "~54.0.0",
+    "typescript": "~5.9.2"
+  },
+  "private": true
+}
+
+================================================================================
+ARQUIVO: Cuidar_Plus_v2/app.json
+================================================================================
+{
+  "expo": {
+    "name": "Cuidar_Plus_v2",
+    "slug": "Cuidar_Plus_v2",
+    "scheme": "cuidarplus",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.hospital.cuidarplus",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "softwareKeyboardLayoutMode": "resize",
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "apiUrl": "http://192.168.15.186:8080",
+      "eas": {
+        "projectId": "c536b372-1be7-4cea-b248-7b0bd01352eb"
+      }
+    },
+    "plugins": [
+      "expo-web-browser"
+    ]
+  }
+}
+
+================================================================================
+ARQUIVO: Cuidar_Plus_v2/src/services/authService.ts
+NOTA: Firebase REMOVIDO. Apenas axios para o backend Java local.
+================================================================================
+import axios from 'axios';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
+import { LoginRequest, LoginResponse, PacienteSession } from '../models/auth/AuthTypes';
+import { STORAGE_TOKEN_KEY } from '../context/AuthContext';
+
+// ─────────────────────────────────────────────────────────────
+// CONFIGURAÇÃO DA URL BASE
+//
+// • Emulador Android (AVD oficial): usa 10.0.2.2
+//   → O AVD redireciona 10.0.2.2 automaticamente para o localhost do seu PC
+//
+// • Simulador iOS / dispositivo físico / web: usa o IP da sua máquina
+//   → Descubra seu IP com: ipconfig (Windows) | ifconfig (Mac/Linux)
+//   → Exemplo: 'http://192.168.1.105:8080'
+//
+// Ao trocar de rede Wi-Fi, atualize DEV_MACHINE_IP.
+// ─────────────────────────────────────────────────────────────
+
+const DEV_MACHINE_IP = '192.168.15.186'; // ← IP atual da sua máquina (Wi-Fi)
+
+const getBaseURL = (): string => {
+  if (__DEV__) {
+    return `http://${DEV_MACHINE_IP}:8080`;
+  }
+  return 'https://sua-api-em-producao.com';
+};
+
+export const API_BASE_URL = getBaseURL();
+
+export const apiPublica = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 10_000,
+  headers: {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  },
+});
+
+export const apiAutenticada = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 10_000,
+  headers: {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  },
+});
+
+apiAutenticada.interceptors.request.use(async (config) => {
+  let token: string | null = null;
+
+  try {
+    token = await AsyncStorage.getItem(STORAGE_TOKEN_KEY);
+  } catch {
+    token = null;
+  }
+
+  // Fallback para Web (Expo Web)
+  if (!token && (Platform.OS === 'web')) {
+    try {
+      token = localStorage.getItem(STORAGE_TOKEN_KEY);
+    } catch {
+      token = null;
+    }
+  }
+
+  if (token && config.headers) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+
+  return config;
+});
+
+export async function loginPaciente(dados: LoginRequest): Promise<PacienteSession> {
+  const payload = {
+    cpf: dados.cpf.replace(/\D/g, ''),
+    senha: dados.senha,
+  };
+
+  const loginRes = await apiPublica.post<LoginResponse>('/api/auth/login', payload);
+  const { token, idPaciente, nome: nomeDoToken, leito: leitoDoToken } = loginRes.data;
+  console.log("[DEBUG] loginRes", loginRes);
+  let nome = nomeDoToken ?? 'Paciente';
+  let leito = leitoDoToken;
+
+  if (!nomeDoToken && idPaciente) {
+    try {
+      const pacienteRes = await apiPublica.get<{
+        nome?: string;
+        leito?: string;
+        numeroProntuario?: string;
+      }>(`/api/pacientes/${idPaciente}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      nome = pacienteRes.data.nome ?? nome;
+      leito = pacienteRes.data.leito ?? leito;
+    } catch (error) {
+      console.error("[ERROR] authService.ts", error);
+    }
+  }
+
+  return { token, idPaciente, nome, leito };
+}
+
+export async function esqueciSenha(cpf: string): Promise<{ emailMascarado: string }> {
+  const response = await apiPublica.post<{ emailMascarado: string }>(
+    '/api/auth/esqueci-senha',
+    { cpf: cpf.replace(/\D/g, '') }
+  );
+  return response.data;
+}
+
+export async function resetarSenha(
+  codigo: string,
+  novaSenha: string
+): Promise<{ mensagem: string }> {
+  const response = await apiPublica.post<{ mensagem: string }>(
+    '/api/auth/resetar-senha',
+    { codigo, novaSenha }
+  );
+  return response.data;
+}
+
+export interface PacienteAtualizacaoPayload {
+  idPaciente: number;
+  telefoneContato?: string;
+  nomeResponsavel?: string;
+  telefoneResponsavel?: string;
+}
+
+export async function atualizarPaciente(id: number, dados: PacienteAtualizacaoPayload): Promise<any> {
+  const response = await apiAutenticada.put(`/api/pacientes/${id}`, dados);
+  return response.data;
+}
+
+export default apiAutenticada;
+
+================================================================================
+ARQUIVO: Cuidar_Plus_v2/src/context/AuthContext.tsx
+NOTA: Sem Firebase. Gerencia apenas o JWT do backend Java via AsyncStorage.
+================================================================================
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { PacienteSession } from '../models/auth/AuthTypes';
+
+export const STORAGE_TOKEN_KEY     = '@CuidarPlus:token';
+export const STORAGE_PACIENTE_KEY  = '@CuidarPlus:paciente_session';
+
+export const AUTH_TOKEN_KEY  = STORAGE_TOKEN_KEY;
+export const PACIENTE_ID_KEY = '@CuidarPlus:id_paciente';
+
+interface AuthContextData {
+  paciente: PacienteSession | null;
+  isLoading: boolean;
+  isAuthenticated: boolean;
+  salvarSessao: (sessao: PacienteSession) => Promise<void>;
+  encerrarSessao: () => Promise<void>;
+}
+
+const AuthContext = createContext<AuthContextData>({} as AuthContextData);
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [paciente, setPaciente] = useState<PacienteSession | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    async function restaurarSessao() {
+      try {
+        const json = await AsyncStorage.getItem(STORAGE_PACIENTE_KEY);
+        if (json) {
+          const sessaoSalva: PacienteSession = JSON.parse(json);
+          setPaciente(sessaoSalva);
+        }
+      } catch {
+        await AsyncStorage.removeItem(STORAGE_PACIENTE_KEY);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    restaurarSessao();
+  }, []);
+
+  const salvarSessao = useCallback(async (sessao: PacienteSession) => {
+    await AsyncStorage.setItem(STORAGE_PACIENTE_KEY, JSON.stringify(sessao));
+    await AsyncStorage.setItem(STORAGE_TOKEN_KEY, sessao.token);
+    await AsyncStorage.setItem(PACIENTE_ID_KEY, String(sessao.idPaciente));
+    setPaciente(sessao);
+  }, []);
+
+  const encerrarSessao = useCallback(async () => {
+    await AsyncStorage.multiRemove([
+      STORAGE_PACIENTE_KEY,
+      STORAGE_TOKEN_KEY,
+      PACIENTE_ID_KEY,
+    ]);
+    setPaciente(null);
+  }, []);
+
+  const value = useMemo<AuthContextData>(
+    () => ({
+      paciente,
+      isLoading,
+      isAuthenticated: paciente !== null,
+      salvarSessao,
+      encerrarSessao,
+    }),
+    [paciente, isLoading, salvarSessao, encerrarSessao]
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function useAuth(): AuthContextData {
+  const ctx = useContext(AuthContext);
+  if (!ctx) {
+    throw new Error('useAuth deve ser usado dentro de <AuthProvider>');
+  }
+  return ctx;
+}
+
+export default AuthContext;
+
+================================================================================
+ARQUIVO: Cuidar_Plus_v2/src/viewmodels/useLoginViewModel.ts
+NOTA: Firebase e Google Sign-In REMOVIDOS. Apenas login por CPF/senha.
+================================================================================
+import { useState, useCallback } from 'react';
+import { useNavigation } from '@react-navigation/native';
+import { StackNavigationProp } from '@react-navigation/stack';
+import { loginPaciente } from '../services/authService';
+import { useAuth } from '../context/AuthContext';
+
+export type RootStackParamList = {
+  Login: undefined;
+  Home: undefined;
+  EsqueciSenha: undefined;
+  ResetarSenha: { emailMascarado: string };
+  CategoriaDetalhes: { categoriaId: string; label: string };
+  NovoPedido: { categoriaId: string; categoriaLabel: string; subCategoriaLabel: string };
+  SelecaoAtendimento: undefined;
+};
+
+type LoginNavProp = StackNavigationProp<RootStackParamList, 'Login'>;
+
+export const AUTH_TOKEN_KEY = '@CuidarPlus:token';
+export const PACIENTE_ID_KEY = '@CuidarPlus:id_paciente';
+
+export interface LoginViewState {
+  cpf: string;
+  senha: string;
+  loading: boolean;
+  errorMessage: string | null;
+}
+
+export interface LoginViewActions {
+  setCpf: (value: string) => void;
+  setSenha: (value: string) => void;
+  handleCpfChange: (value: string) => void;
+  handleLogin: () => Promise<void>;
+}
+
+export function useLoginViewModel(): LoginViewState & LoginViewActions {
+  const navigation = useNavigation<LoginNavProp>();
+  const { salvarSessao } = useAuth();
+
+  const [cpf, setCpfRaw] = useState('');
+  const [senha, setSenhaRaw] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const handleCpfChange = useCallback((value: string) => {
+    const digits = value.replace(/\D/g, '').slice(0, 11);
+    let masked = digits;
+    if (digits.length > 9) masked = `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+    else if (digits.length > 6) masked = `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
+    else if (digits.length > 3) masked = `${digits.slice(0, 3)}.${digits.slice(3)}`;
+    setCpfRaw(masked);
+    setErrorMessage(null);
+  }, []);
+
+  const setCpf = useCallback((value: string) => {
+    setCpfRaw(value);
+    setErrorMessage(null);
+  }, []);
+
+  const setSenha = useCallback((value: string) => {
+    setSenhaRaw(value);
+    setErrorMessage(null);
+  }, []);
+
+  const handleLogin = useCallback(async () => {
+    const cpfDigits = cpf.replace(/\D/g, '');
+
+    if (!cpfDigits) { setErrorMessage('Por favor, informe o seu CPF.'); return; }
+    if (cpfDigits.length !== 11) { setErrorMessage('CPF inválido. Informe todos os 11 dígitos.'); return; }
+    if (!senha.trim()) { setErrorMessage('Por favor, informe a sua senha.'); return; }
+    if (senha.trim().length < 3) { setErrorMessage('A senha deve ter pelo menos 3 caracteres.'); return; }
+
+    setErrorMessage(null);
+    setLoading(true);
+
+    try {
+      const sessao = await loginPaciente({ cpf: cpfDigits, senha: senha.trim() });
+      await salvarSessao(sessao);
+    } catch (error: any) {
+      const status = error?.response?.status;
+      const code = error?.code;
+      console.error('[ERROR] useLoginViewModel.ts', error);
+      if (status === 401 || status === 403) {
+        setErrorMessage('CPF ou senha incorretos. Verifique e tente novamente.');
+      } else if (status === 404) {
+        setErrorMessage('Paciente não encontrado. Confirme o CPF com a recepção.');
+      } else if (code === 'ECONNREFUSED' || code === 'ERR_NETWORK') {
+        setErrorMessage('Não foi possível conectar ao servidor. Verifique sua conexão Wi-Fi.');
+      } else if (code === 'ECONNABORTED') {
+        setErrorMessage('O servidor demorou para responder. Tente novamente.');
+      } else {
+        setErrorMessage('Ocorreu um erro inesperado. Tente novamente em instantes.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [cpf, senha, navigation, salvarSessao]);
+
+  return { cpf, senha, loading, errorMessage, setCpf, setSenha, handleCpfChange, handleLogin };
+}
+
+================================================================================
+ARQUIVO: Cuidar_Plus_v2/src/__tests__/authService.test.ts
+NOTA: Testa apenas loginPaciente (CPF/senha). Sem mocks de Firebase.
+================================================================================
+const mockAxiosInstance = {
+  get: jest.fn(),
+  post: jest.fn(),
+  put: jest.fn(),
+  interceptors: {
+    request: { use: jest.fn() },
+    response: { use: jest.fn() },
+  },
+};
+
+jest.mock('axios', () => {
+  const actualCreate = jest.fn(() => mockAxiosInstance);
+  return {
+    __esModule: true,
+    default: { create: actualCreate, get: jest.fn(), post: jest.fn() },
+    create: actualCreate,
+  };
+});
+
+describe('authService', () => {
+  beforeEach(() => { jest.clearAllMocks(); });
+
+  describe('loginPaciente', () => {
+    it('deve retornar uma PacienteSession válida com CPF e senha corretos', async () => {
+      mockAxiosInstance.post.mockResolvedValue({
+        data: { token: 'jwt-spring-boot', idPaciente: 10, nome: 'João', leito: 'B-202' },
+      });
+      const { loginPaciente } = require('../services/authService');
+      const sessao = await loginPaciente({ cpf: '12345678901', senha: '123' });
+      expect(sessao.token).toBe('jwt-spring-boot');
+      expect(sessao.idPaciente).toBe(10);
+      expect(sessao.nome).toBe('João');
+    });
+
+    it('deve lançar erro quando a API retorna 401', async () => {
+      mockAxiosInstance.post.mockRejectedValue({ response: { status: 401 }, message: 'Unauthorized' });
+      const { loginPaciente } = require('../services/authService');
+      await expect(loginPaciente({ cpf: '12345678901', senha: 'errada' })).rejects.toMatchObject({
+        response: { status: 401 },
+      });
+    });
+  });
+});
+
+================================================================================
+ARQUIVO: Cuidar_Plus_v2/src/__tests__/useLoginViewModel.test.ts
+NOTA: Testa apenas handleLogin e handleCpfChange. Sem mocks de Google/Firebase.
+================================================================================
+import { renderHook, act } from '@testing-library/react-native';
+
+const mockLoginPaciente = jest.fn();
+
+jest.mock('../services/authService', () => ({
+  loginPaciente: (...args: any[]) => mockLoginPaciente(...args),
+  apiPublica: { post: jest.fn(), get: jest.fn() },
+  apiAutenticada: { post: jest.fn(), get: jest.fn(), put: jest.fn() },
+}));
+
+const mockSalvarSessao = jest.fn();
+jest.mock('../context/AuthContext', () => ({
+  useAuth: () => ({
+    salvarSessao: mockSalvarSessao,
+    encerrarSessao: jest.fn(),
+    paciente: null,
+    isLoading: false,
+    isAuthenticated: false,
+  }),
+  STORAGE_TOKEN_KEY: '@CuidarPlus:token',
+}));
+
+import { useLoginViewModel } from '../viewmodels/useLoginViewModel';
+
+describe('useLoginViewModel', () => {
+  beforeEach(() => { jest.clearAllMocks(); });
+
+  describe('handleCpfChange', () => {
+    it('deve formatar CPF com máscara XXX.XXX.XXX-XX', () => {
+      const { result } = renderHook(() => useLoginViewModel());
+      act(() => { result.current.handleCpfChange('12345678901'); });
+      expect(result.current.cpf).toBe('123.456.789-01');
+    });
+  });
+
+  describe('handleLogin', () => {
+    it('deve mostrar erro se CPF estiver vazio', async () => {
+      const { result } = renderHook(() => useLoginViewModel());
+      await act(async () => { await result.current.handleLogin(); });
+      expect(result.current.errorMessage).toBe('Por favor, informe o seu CPF.');
+    });
+
+    it('deve chamar loginPaciente e salvarSessao com CPF e senha válidos', async () => {
+      const sessaoMock = { token: 'jwt-token', idPaciente: 1, nome: 'Teste', leito: 'A-1' };
+      mockLoginPaciente.mockResolvedValue(sessaoMock);
+      const { result } = renderHook(() => useLoginViewModel());
+      act(() => {
+        result.current.handleCpfChange('12345678901');
+        result.current.setSenha('123');
+      });
+      await act(async () => { await result.current.handleLogin(); });
+      expect(mockLoginPaciente).toHaveBeenCalledWith({ cpf: '12345678901', senha: '123' });
+      expect(mockSalvarSessao).toHaveBeenCalledWith(sessaoMock);
+    });
+  });
+});
